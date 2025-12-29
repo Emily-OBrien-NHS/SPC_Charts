@@ -31,3 +31,6 @@ pdfs/
 
 #emails text file
 emails.txt
+
+#The wierd thumbs.db file that's appeared
+*.db

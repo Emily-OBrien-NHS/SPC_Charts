@@ -11,22 +11,22 @@ from datetime import datetime
 from operator import itemgetter
 from sqlalchemy import create_engine
 from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import A4
 mpl.rcParams.update({'font.size': 18})
 
-############################
-#Plots run and save, can create pdf, just need to sort email and HP and SP to review.
-#Then need to work out power automate.
-##########################SEE NOTE AT END
 
-
-
+###################################################################################################
+                                ####Define various filepaths####
+###################################################################################################
 base_path = "G:/PerfInfo/Performance Management/OR Team/Emily Projects/General Analysis/SPC Charts/"
 symbol_path = "G:/PerfInfo/Performance Management/OR Team/Emily Projects/General Analysis/SPC Charts/Symbols/"
 charts_path = "G:/PerfInfo/Performance Management/OR Team/Emily Projects/General Analysis/SPC Charts/SPC Charts/"
 pdfs_path = "G:/PerfInfo/Performance Management/OR Team/Emily Projects/General Analysis/SPC Charts/pdfs/"
+email_signature = 'G:/PerfInfo/Performance Management/OR Team/Emily Projects/General Analysis/SPC Charts/Symbols/email footer.png'
 
-#########################Read in data
+###################################################################################################
+                                        ####Read in data####
+###################################################################################################
 #create connection
 sdmart_engine = create_engine('mssql+pyodbc://@SDMartDataLive2/InfoDB?'\
                            'trusted_connection=yes&driver=ODBC+Driver+17'\
@@ -36,7 +36,9 @@ data_sql = """SELECT [WeekEndDate],
                      [metric_id],
                      [metric_desc],
                      [data],
-                     [GoodDirection]
+                     [GoodDirection],
+                     [ReCalc],
+                     [Reason]
                      FROM [InfoDB].[dbo].[ceo_flashcard]
                      ORDER BY metric_id, WeekEndDate"""
 
@@ -44,11 +46,15 @@ full_data = pd.read_sql(data_sql, sdmart_engine)
 
 sdmart_engine.dispose()
 
-
-############################SPC Chart function
+###################################################################################################
+                                ####Function to create SPC charts####
+###################################################################################################
 #Function defining SPC chart without using a window. Using moving range for 
 #lower plot
-def spcChartIndiv(data, date, title_text, good_dir = 'down', target = None):
+def spcChartIndiv(sub_data, id, metric, good_dir = 'down', target=''):
+    data = sub_data['data'].to_numpy()
+    date = sub_data['WeekEndDate'].to_numpy()
+    save_name = f'{id} {metric.replace('<', 'lt').replace('>', 'gt').replace('/', ' or ')}'
     #####Initial calculations
     #Find the mean and SD of this data
     data_mean = np.nanmean(data)
@@ -64,10 +70,14 @@ def spcChartIndiv(data, date, title_text, good_dir = 'down', target = None):
     l_mean_al = max(data_mean - 2.66 * mov_R_mean, 0)
     u_mean_wl =  data_mean + (2/3)*2.66 * mov_R_mean
     l_mean_wl = max(data_mean - (2/3)*2.66 * mov_R_mean, 0)
-    
+
+    if sub_data['ReCalc'].str.contains('Y').any():
+        ############do something here#################
+        m=9
+        
     ######Set up Plot
     fig, ax1 = plt.subplots(1,1, figsize=(15, 4))
-    ax1.set_title('\n'.join(tw.wrap(title_text, 50)))
+    ax1.set_title('\n'.join(tw.wrap(metric, 50)))
     #Set up the colours for each direction
     if good_dir == 'Down' or good_dir == 'Neutral':
         c_between_u = 'darkorange'
@@ -86,7 +96,8 @@ def spcChartIndiv(data, date, title_text, good_dir = 'down', target = None):
 
     ######Plot the data
     #Plot the data as small points
-    ax1.plot(date, data, 'o-', color = 'slategrey', markersize = 4, zorder = 10)
+    markersize = 15
+    ax1.plot(date, data, 'o-', color = 'slategrey', markersize = markersize, zorder = 10)
     #Add mean and upper and lower lines
     ax1.plot(date, data_mean*np.ones(len(data)),'k--')
     ax1.plot(date, u_mean_al*np.ones(len(data)), 'r:')
@@ -220,7 +231,7 @@ def spcChartIndiv(data, date, title_text, good_dir = 'down', target = None):
         #Add the window to the x-values so that the points are in the right place
         ax1.plot([date[x] for x in run_above_points[i]],
                    data[run_above_points[i]],
-                   color = c_run_above, marker = 'o', markersize = 4,
+                   color = c_run_above, marker = 'o', markersize = markersize,
                    zorder = 11, linestyle = 'None')
 
     #Do the same for the run below
@@ -228,7 +239,7 @@ def spcChartIndiv(data, date, title_text, good_dir = 'down', target = None):
         #Add the window to the x-values so that the points are in the right place
         ax1.plot([date[x] for x in run_below_points[i]],
                    data[run_below_points[i]],
-                   color = c_run_below, marker = 'o', markersize = 4,
+                   color = c_run_below, marker = 'o', markersize = markersize,
                    zorder = 11, linestyle = 'None')
 
     #Repeat for between points
@@ -237,7 +248,7 @@ def spcChartIndiv(data, date, title_text, good_dir = 'down', target = None):
         #Add the window to the x-values so that the points are in the right place
         ax1.plot([date[x] for x in between_upper_points[i]],
                    data[between_upper_points[i]],
-                   color = c_between_u, marker = 'o', markersize = 4,
+                   color = c_between_u, marker = 'o', markersize = markersize,
                    zorder = 12, linestyle = 'None')
 
     #Do the same for the run below
@@ -245,20 +256,20 @@ def spcChartIndiv(data, date, title_text, good_dir = 'down', target = None):
         #Add the window to the x-values so that the points are in the right place
         ax1.plot([date[x] for x in between_lower_points[i]],
                    data[between_lower_points[i]],
-                   color = c_between_l, marker = 'o', markersize = 4,
+                   color = c_between_l, marker = 'o', markersize = markersize,
                    zorder = 12, linestyle = 'None')
         
     #Finally, add in the points above or below 3 sigma lines
     for i in range(len(above_3s)):
         ax1.plot(date[above_3s[i]],
                    data[above_3s[i]],
-                   color = c_above_3s, marker = 'o', markersize = 4,
+                   color = c_above_3s, marker = 'o', markersize = markersize,
                    zorder = 13, linestyle = 'None')
         
     for i in range(len(below_3s)):
         ax1.plot(date[below_3s[i]],
                    data[below_3s[i]],
-                   color = c_below_3s, marker = 'o', markersize = 4,
+                   color = c_below_3s, marker = 'o', markersize = markersize,
                    zorder = 13, linestyle = 'None')
     
     ######Target Value
@@ -272,75 +283,84 @@ def spcChartIndiv(data, date, title_text, good_dir = 'down', target = None):
             cp = (data_mean - target) / (3* data_SD)
                 
     #######Save the figure
-    fig.savefig(charts_path + title_text + ".png", format='png', bbox_inches="tight")
+    fig.savefig(charts_path + save_name + ".png", format='png', bbox_inches="tight")
     plt.close()
 
 
+###################################################################################################
+                                    ####Create SPC Charts####
+###################################################################################################
 ######Loop over each metric and create it's SPC Chart
 #List of unique metrics
 metrics = (full_data[['metric_id', 'metric_desc', 'GoodDirection']]
            .drop_duplicates().sort_values(by='metric_id').values.tolist())
-
+#Loop over each metric and create it's SPC
 for id, metric, good_dir in metrics:
     #Filter data to that metric, ensure it's sorted
     sub_data = full_data.loc[full_data['metric_id'] == id].copy()
-    #Create file title (replacing invalid symbols)
-    title = f'{id} {metric.replace('<', 'lt').replace('>', 'gt').replace('/', ' or ')}'
     #Create and save the SPC Chart
-    spcChartIndiv(sub_data['data'].to_numpy(),  sub_data['WeekEndDate'].to_numpy(), title, good_dir)
+    spcChartIndiv(sub_data, id, metric, good_dir)
+print(f'All SPC Charts created and saved in {charts_path}')
 
-
-######Create PDF
+###################################################################################################
+                                    ####Create pdf file####
+###################################################################################################
 #Create a pdf at the desired path
 pdf_filepath = pdfs_path + f'SPC Charts {datetime.today().strftime('%Y-%m-%d')}.pdf'
-c = canvas.Canvas(pdf_filepath, pagesize=letter)
+c = canvas.Canvas(pdf_filepath)
 #Set key variables
 images_per_page = 4
 cols = 1
 rows = 4
-width, height = letter
-margin = 20
+width, height = A4
+margin = 2
 img_width = (width - margin * 3) / cols
 img_height = (height - margin * 3) / rows
 
 #Loop over each image, start a new page if required
 for i, img_path in enumerate(os.listdir(charts_path)):
-    if i > 0 and i % images_per_page == 0:
-        c.showPage()  # New page
-    
-    #Work out image position
-    position = i % images_per_page
-    col = position % cols
-    row = position // cols
-    x = margin + col * (img_width + margin)
-    y = height - margin - (row + 1) * (img_height + margin)
-    #add image to page
-    c.drawImage(charts_path+img_path, x, y, width=img_width, height=img_height, 
-                preserveAspectRatio=True, anchor='c')
+    #Ensure only png image files are added to the pdf, in case others sneak in
+    if img_path.split('.')[-1] == 'png':
+        #Create a new page if 4 images have already been added
+        if i > 0 and i % images_per_page == 0:
+            c.showPage()  # New page
+        
+        #Work out image position
+        position = i % images_per_page
+        col = position % cols
+        row = position // cols
+        x = margin + col * (img_width + margin)
+        y = height - margin - (row + 1) * (img_height + margin)
+        #add image to page
+        c.drawImage(charts_path+img_path, x, y, width=img_width, height=img_height, 
+                    preserveAspectRatio=True, anchor='c')
 #save pdf
 c.save()
+print(f'new pdf created in {pdfs_path}')
 
-######Send Email
-
-
-#############ERROR ModuleNotFoundError - pywintypes
-#need to get to the bottom to be able to automate email sending (360 review emails work, maybe this needs its own venv?)
-###########################################################
-
-
-
-
-
+###################################################################################################
+                                        ####Send email####
+###################################################################################################
 #send email with latest flagged output attatched    
 # Create Outlook application object and mail item
 outlook = win32.Dispatch('outlook.application')
 mail = outlook.CreateItem(0)    
 # Set email properties
-mail.To = open(base_path + 'emails.txt', 'r').read()
+#mail.To = open(base_path + 'emails.txt', 'r').read()
+mail.To = 'e.obrien6@nhs.net'
 mail.Subject = 'TEST - SPC Charts'
-mail.Body = """Hi,\n
-Please find attatched the test SPC file \n
-Emily"""
+#HTML of email content
+email_content = r"""<p>Hi,</p>
+<p>Please find attatched the test SPC file</p>
+<p class="xmsonormal" style="background: white;"><strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">Emily O&rsquo;Brien</span></strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">&nbsp;|</span><strong><span style="font-size: 10.0pt; color: #1f497d;">&nbsp;</span></strong><strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">Healthcare Data Scientist</span></strong><span style="font-size: 10.0pt; color: #1f497d;"><br /> </span><strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">University Hospitals Plymouth NHS Trust</span></strong></p>
+<p class="xmsonormal" style="background: white;"><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">Second Floor | Brittany House | Brest Road | Derriford | Plymouth | PL6 5YE</span></p>
+<p class="xmsonormal" style="background: white;"><strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">E-mail:&nbsp;</span></strong><strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: blue;"><a href="mailto:e.obrien6@nhs.net">e.obrien6@nhs.net</a></span></strong></p>
+<p class="xmsonormal" style="background: white;"><strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">Team Email (</span></strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">Please use for information requests<strong>)</strong></span><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: #17365d;">:&nbsp;</span><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: blue;"><a href="mailto:plh-tr.phntsafehaven@nhs.net">plh-tr.phntsafehaven@nhs.net</a></span></p>
+"""
+#Add email signature to the end of the html
+attachment = mail.Attachments.Add(email_signature)
+attachment.PropertyAccessor.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", "MyId1")
+mail.HTMLBody = email_content + "<html><body><img src=""cid:MyId1""></body></html>"
 #Attatch the flagged file
 mail.Attachments.Add(pdf_filepath)
 # Send email
