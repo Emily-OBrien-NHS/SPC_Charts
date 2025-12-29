@@ -18,11 +18,11 @@ mpl.rcParams.update({'font.size': 18})
 ###################################################################################################
                                 ####Define various filepaths####
 ###################################################################################################
-base_path = "G:/PerfInfo/Performance Management/OR Team/Emily Projects/General Analysis/SPC Charts/"
-symbol_path = "G:/PerfInfo/Performance Management/OR Team/Emily Projects/General Analysis/SPC Charts/Symbols/"
-charts_path = "G:/PerfInfo/Performance Management/OR Team/Emily Projects/General Analysis/SPC Charts/SPC Charts/"
-pdfs_path = "G:/PerfInfo/Performance Management/OR Team/Emily Projects/General Analysis/SPC Charts/pdfs/"
-email_signature = 'G:/PerfInfo/Performance Management/OR Team/Emily Projects/General Analysis/SPC Charts/Symbols/email footer.png'
+base_path = "G:/PerfInfo/Performance Management/OR Team/Emily Projects/General Analysis/SPC Charts"
+symbol_path = base_path + "/Symbols/"
+charts_path = base_path + "/SPC Charts/"
+pdfs_path = base_path + "/pdfs/"
+email_path = base_path + "/email files/"
 
 ###################################################################################################
                                         ####Read in data####
@@ -52,56 +52,68 @@ sdmart_engine.dispose()
 #Function defining SPC chart without using a window. Using moving range for 
 #lower plot
 def spcChartIndiv(sub_data, id, metric, good_dir = 'down', target=''):
-    data = sub_data['data'].to_numpy()
+    #####Initial calculations
+    data_len = len(sub_data['data'])
     date = sub_data['WeekEndDate'].to_numpy()
     save_name = f'{id} {metric.replace('<', 'lt').replace('>', 'gt').replace('/', ' or ')}'
-    #####Initial calculations
-    #Find the mean and SD of this data
-    data_mean = np.nanmean(data)
-    #Use ddof=1 so that N-1 is used as the denominator
-    data_SD = np.nanstd(data, ddof = 1)
-    #Also find the moving range (max-min for each period). Have to add two as the
-    #second value in square brackets is not included.
-    mov_R = [np.ptp(data[i:i+2]) for i in range(len(data) - 1)]
-    mov_R = np.array(mov_R, dtype = float)
-    mov_R_mean = mov_R.mean()
-    #Find the action lines and warning lines for the mean plot
-    u_mean_al =  data_mean + 2.66 * mov_R_mean
-    l_mean_al = max(data_mean - 2.66 * mov_R_mean, 0)
-    u_mean_wl =  data_mean + (2/3)*2.66 * mov_R_mean
-    l_mean_wl = max(data_mean - (2/3)*2.66 * mov_R_mean, 0)
+    recalc = sub_data['ReCalc'].str.contains('Y').any()
+    #If no re-calculations defined, then we just calculate the thresholds on all the data
+    if not recalc:
+        #Find the mean and SD of this data (Use ddof=1 so that N-1 is the denominator)
+        sub_data['data_mean'] = np.nanmean(sub_data['data'])
+        sub_data['data_std'] = np.nanstd(sub_data['data'], ddof = 1)
+        #Also find the moving range (max-min for each period). Have to add two as the
+        #second value in square brackets is not included.
+        sub_data['mov_R_mean'] = np.array([np.ptp(sub_data['data'].iloc[i:i+2])
+                                           for i in range(data_len - 1)],
+                                           dtype = float).mean()
 
-    if sub_data['ReCalc'].str.contains('Y').any():
-        ############do something here#################
-        m=9
-        
+    #if there are recalculation flags, then we calculate for individual sections
+    else:
+        #filter data to get the rows where recalc flags, and create recalc string
+        recalcs = sub_data.loc[sub_data['ReCalc'] == 'Y'].copy()
+        recalc_string = f'Limits have been recalculated {len(recalcs)} times due to: {', '.join(recalcs['Reason'])}.'
+        #Get a list of where the bounaries of each recalc section begin and end
+        boundary_list = [0] + recalcs.index.tolist() + [len(sub_data)]
+        #empty list to store results
+        split_calculations = []
+        #Loop over each section of the data and perform calculations
+        for i in range(len(boundary_list)-1):
+            #select only the data for that section and calculate mean, std and moving range
+            data_part = sub_data['data'].iloc[boundary_list[i] : boundary_list[i+1]]
+            data_mean = np.nanmean(data_part)
+            data_std = np.nanstd(data_part)
+            mov_R = np.array([np.ptp(data_part[i:i+2]) for i in range(len(data_part) - 1)], dtype = float).mean()
+            #add tuple of mean, std and moving range, to output list (repeated for the number of data points)
+            split_calculations += [(data_mean, data_std, mov_R)] * len(data_part)
+        #Create the columns on sub data for the changing mean, std and moving range
+        sub_data[['data_mean', 'data_std', 'mov_R_mean']] = split_calculations
+
+    #Find the action lines and warning lines for the mean plot (3sigma and 2 sigma)
+    sub_data['u_mean_al'] =  sub_data['data_mean'] + 2.66 * sub_data['mov_R_mean']
+    sub_data['l_mean_al'] = (sub_data['data_mean'] - 2.66 * sub_data['mov_R_mean']).clip(lower=0)
+    sub_data['u_mean_wl'] =  sub_data['data_mean'] + (2/3)*2.66 * sub_data['mov_R_mean']
+    sub_data['l_mean_wl'] = (sub_data['data_mean'] - (2/3)*2.66 * sub_data['mov_R_mean']).clip(lower=0)
+ 
     ######Set up Plot
     fig, ax1 = plt.subplots(1,1, figsize=(15, 4))
     ax1.set_title('\n'.join(tw.wrap(metric, 50)))
     #Set up the colours for each direction
     if good_dir == 'Down' or good_dir == 'Neutral':
-        c_between_u = 'darkorange'
-        c_between_l = 'blue'#'limegreen'
-        c_above_3s = 'darkorange'#'red'
-        c_below_3s = 'blue'#'lime'
-        c_run_above = 'darkorange'#'gold'
-        c_run_below = 'blue'#'forestgreen'
+        c_between_u = c_above_3s = c_run_above = 'darkorange'
+        c_between_l = c_below_3s = c_run_below = 'blue'
     elif good_dir == 'Up':
-        c_between_u = 'blue'#'limegreen'
-        c_between_l = 'darkorange'
-        c_above_3s = 'blue'#'lime'
-        c_below_3s = 'darkorange'#'red'
-        c_run_above = 'blue'#'forestgreen'
-        c_run_below = 'darkorange'#'gold'
+        c_between_u = c_above_3s = c_run_above = 'blue'
+        c_between_l = c_below_3s = c_run_below = 'darkorange'
 
     ######Plot the data
-    #Plot the data as small points
+    #Plot the data as points
     markersize = 15
-    ax1.plot(date, data, 'o-', color = 'slategrey', markersize = markersize, zorder = 10)
+    ax1.plot(date, sub_data['data'], 'o-', color = 'slategrey', markersize = markersize, zorder = 10)
     #Add mean and upper and lower lines
-    ax1.plot(date, data_mean*np.ones(len(data)),'k--')
-    ax1.plot(date, u_mean_al*np.ones(len(data)), 'r:')
-    ax1.plot(date, l_mean_al*np.ones(len(data)), 'r:')
+    ax1.plot(date, sub_data['data_mean'], 'k--')
+    ax1.plot(date, sub_data['u_mean_al'], 'r:')
+    ax1.plot(date, sub_data['l_mean_al'], 'r:')
 
     #######Set xlabel and x ticks
     ax1.set_xlabel('Date')
@@ -111,10 +123,7 @@ def spcChartIndiv(sub_data, id, metric, good_dir = 'down', target=''):
     #If this gives a number less than one, then need to look at days on the 
     #x-axis instead
     if intvl <= 1:
-        if num_months <= 4:
-            intvl = 1
-        else:
-            intvl = 2
+        intvl = 1 if num_months <=4 else 2
         ax1.xaxis.set_major_locator(mdates.MonthLocator(bymonthday = 1,
                                                         interval = intvl))
         ax1.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%y'))
@@ -128,22 +137,6 @@ def spcChartIndiv(sub_data, id, metric, good_dir = 'down', target=''):
             label.set(rotation=0, horizontalalignment='center')
 
     ######Implement rules
-    #Rules used here - out of control if:
-    #    any point is outside of either 3sigma line,
-    #    or, (N-1) points consecutively between 2sigma and 3sigma line 
-    #       (on the same side of the mean line) '
-    #    or, 2.5N consecutive points all rising or falling ,
-    #    or, if any point is outside lines on SD plot
-    above_3s, = np.where((data >= u_mean_al))
-    below_3s, = np.where((data <= l_mean_al))
-    between_limit = 5
-    between_lines_upper, =  np.where((data <= u_mean_al) 
-                                   & (data >= u_mean_wl))
-    between_lines_lower, =  np.where((data >= l_mean_al)
-                                   & (data <= l_mean_wl))
-    run_limit = 8
-    run_above, = np.where(data > data_mean)
-    run_below, = np.where(data < data_mean)
     #Search for consecutive points in between_lines and run_above/below
     def consecutiveNums(dataset, min_run):
         output = []
@@ -151,16 +144,33 @@ def spcChartIndiv(sub_data, id, metric, good_dir = 'down', target=''):
             row = list(map(itemgetter(1), g))
             if len(row) >= min_run: output.append(row)
         return output
+    
+    #Rules used here - out of control if:
+    #N consecutive points above or below the mean (rising/falling)
+    run_limit = 8
+    run_above = sub_data.loc[sub_data['data'] > sub_data['data_mean']].index.tolist()
+    run_below = sub_data.loc[sub_data['data'] < sub_data['data_mean']].index.tolist()
     run_above_points = consecutiveNums(run_above, run_limit)
     run_below_points = consecutiveNums(run_below, run_limit)
+
+    #N points consecutively between 2sigma and 3sigma line (on the same side of the mean line)
+    between_limit = 5
+    between_lines_upper = sub_data.loc[(sub_data['data'] <= sub_data['u_mean_al'])
+                                     & (sub_data['data'] >= sub_data['u_mean_wl'])].index.tolist()
+    between_lines_lower = sub_data.loc[(sub_data['data'] >= sub_data['l_mean_al'])
+                                     & (sub_data['data'] <= sub_data['l_mean_wl'])].index.tolist()
     between_upper_points = consecutiveNums(between_lines_upper, between_limit)
     between_lower_points = consecutiveNums(between_lines_lower, between_limit)
+    
+    #any point is outside of the 3sigma line
+    above_3s = sub_data.loc[sub_data['data'] >= sub_data['u_mean_al']].index.tolist()
+    below_3s = sub_data.loc[sub_data['data'] <= sub_data['l_mean_al']].index.tolist()
 
     ######Stability test
     #Test whether the most recent 50 data points are consistent with a system
     #in control
-    test_start = len(data) - 50
-    if (len(data) < 50) and (len(data) > 29):
+    test_start = data_len - 50
+    if (data_len < 50) and (data_len > 29):
         test_start = 0
     stable = True
     #First, look at 3 sigma
@@ -181,14 +191,16 @@ def spcChartIndiv(sub_data, id, metric, good_dir = 'down', target=''):
             stable = False
     
     #Add a note to the chart on stability of the system
-    stable_note = 'This process is stable' if stable else 'This process is not stable'
+    stable_note = 'This process is stable.' if stable else 'This process is not stable.'
+    if recalc:
+        stable_note = '\n'.join(tw.wrap(recalc_string + '   ' + stable_note, 120))
     ax1.text(0.5, -0.3, stable_note, ha='center', fontsize=14, transform=ax1.transAxes)
     
     ######Symbols
     #To find which symbol to use to describe the recent changes
     #Assume no changes and re-assign if changes found
     state = 'no_change'
-    symbol_test_start = len(data) - 7
+    symbol_test_start = data_len - 7
     if ((any(x > symbol_test_start for x in above_3s))
         and (any(x > symbol_test_start for x in below_3s))):
         state = 'warning'
@@ -197,7 +209,7 @@ def spcChartIndiv(sub_data, id, metric, good_dir = 'down', target=''):
     elif (any(x > symbol_test_start for x in below_3s)):
         state = 'Down'
     else:
-        for run_data in filter(None, [run_above_points,between_upper_points]):
+        for run_data in filter(None, [run_above_points, between_upper_points]):
             if (any(x>symbol_test_start for x in max(run_data))):
                 state = 'Up'
             else:
@@ -225,62 +237,25 @@ def spcChartIndiv(sub_data, id, metric, good_dir = 'down', target=''):
     axin.axis('off')
 
     ######Plot extrenuous points in a different colour
-    #Add these points to the plot
-    #Loop through the size of each of the lists and plot the points on the graph
-    for i in range(len(run_above_points)):
-        #Add the window to the x-values so that the points are in the right place
-        ax1.plot([date[x] for x in run_above_points[i]],
-                   data[run_above_points[i]],
-                   color = c_run_above, marker = 'o', markersize = markersize,
-                   zorder = 11, linestyle = 'None')
+    def plot_extrenuous(test_list,  colour, order, window):
+        for i in range(len(test_list)):
+            #Add the window to the x-values so that the points are in the right place (if required)
+            dates = date[test_list[i]] if window else [date[x] for x in test_list[i]]
+            #Plot the different coloured points
+            ax1.plot(dates,
+                    sub_data.loc[test_list[i], 'data'],
+                    color = colour, marker = 'o', markersize = markersize,
+                    zorder = order, linestyle = 'None')
 
-    #Do the same for the run below
-    for i in range(len(run_below_points)):
-        #Add the window to the x-values so that the points are in the right place
-        ax1.plot([date[x] for x in run_below_points[i]],
-                   data[run_below_points[i]],
-                   color = c_run_below, marker = 'o', markersize = markersize,
-                   zorder = 11, linestyle = 'None')
-
-    #Repeat for between points
-    #Loop through the size of each of the lists and plot the points on the graph
-    for i in range(len(between_upper_points)):
-        #Add the window to the x-values so that the points are in the right place
-        ax1.plot([date[x] for x in between_upper_points[i]],
-                   data[between_upper_points[i]],
-                   color = c_between_u, marker = 'o', markersize = markersize,
-                   zorder = 12, linestyle = 'None')
-
-    #Do the same for the run below
-    for i in range(len(between_lower_points)):
-        #Add the window to the x-values so that the points are in the right place
-        ax1.plot([date[x] for x in between_lower_points[i]],
-                   data[between_lower_points[i]],
-                   color = c_between_l, marker = 'o', markersize = markersize,
-                   zorder = 12, linestyle = 'None')
-        
-    #Finally, add in the points above or below 3 sigma lines
-    for i in range(len(above_3s)):
-        ax1.plot(date[above_3s[i]],
-                   data[above_3s[i]],
-                   color = c_above_3s, marker = 'o', markersize = markersize,
-                   zorder = 13, linestyle = 'None')
-        
-    for i in range(len(below_3s)):
-        ax1.plot(date[below_3s[i]],
-                   data[below_3s[i]],
-                   color = c_below_3s, marker = 'o', markersize = markersize,
-                   zorder = 13, linestyle = 'None')
-    
-    ######Target Value
-    #Work out process capability if a target was specified and the process is stable
-    #Following formula in https://www.itl.nist.gov/div898/handbook/pmc/section1/pmc16.htm
-    #for one-sided specifications and altering for which way is good
-    if (target is not None) & (stable):
-        if good_dir == 'down':
-            cp = (target - data_mean) / (3* data_SD)
-        elif good_dir == 'up':
-            cp = (data_mean - target) / (3* data_SD)
+    #Highlight the points that were above the mean for N consecutive dates
+    plot_extrenuous(run_above_points, c_run_above, 11, False)
+    plot_extrenuous(run_below_points, c_run_below, 11, False)
+    #Highlight the points that were between the 2 and 3 sigma lines for N consecutive dates.
+    plot_extrenuous(between_upper_points, c_between_u, 12, False)
+    plot_extrenuous(between_lower_points, c_between_l, 12, False)
+    #Highlight the points that fell above or below the 3 sigma line
+    plot_extrenuous(above_3s, c_above_3s, 13, True)
+    plot_extrenuous(below_3s, c_below_3s, 13, True)
                 
     #######Save the figure
     fig.savefig(charts_path + save_name + ".png", format='png', bbox_inches="tight")
@@ -297,7 +272,7 @@ metrics = (full_data[['metric_id', 'metric_desc', 'GoodDirection']]
 #Loop over each metric and create it's SPC
 for id, metric, good_dir in metrics:
     #Filter data to that metric, ensure it's sorted
-    sub_data = full_data.loc[full_data['metric_id'] == id].copy()
+    sub_data = full_data.loc[full_data['metric_id'] == id].copy().reset_index()
     #Create and save the SPC Chart
     spcChartIndiv(sub_data, id, metric, good_dir)
 print(f'All SPC Charts created and saved in {charts_path}')
@@ -346,19 +321,15 @@ print(f'new pdf created in {pdfs_path}')
 outlook = win32.Dispatch('outlook.application')
 mail = outlook.CreateItem(0)    
 # Set email properties
-#mail.To = open(base_path + 'emails.txt', 'r').read()
-mail.To = 'e.obrien6@nhs.net'
+mail.To = open(base_path + 'email addresses.txt', 'r').read()
+#mail.To = 'e.obrien6@nhs.net'
 mail.Subject = 'TEST - SPC Charts'
-#HTML of email content
-email_content = r"""<p>Hi,</p>
-<p>Please find attatched the test SPC file</p>
-<p class="xmsonormal" style="background: white;"><strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">Emily O&rsquo;Brien</span></strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">&nbsp;|</span><strong><span style="font-size: 10.0pt; color: #1f497d;">&nbsp;</span></strong><strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">Healthcare Data Scientist</span></strong><span style="font-size: 10.0pt; color: #1f497d;"><br /> </span><strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">University Hospitals Plymouth NHS Trust</span></strong></p>
-<p class="xmsonormal" style="background: white;"><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">Second Floor | Brittany House | Brest Road | Derriford | Plymouth | PL6 5YE</span></p>
-<p class="xmsonormal" style="background: white;"><strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">E-mail:&nbsp;</span></strong><strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: blue;"><a href="mailto:e.obrien6@nhs.net">e.obrien6@nhs.net</a></span></strong></p>
-<p class="xmsonormal" style="background: white;"><strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">Team Email (</span></strong><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: gray;">Please use for information requests<strong>)</strong></span><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: #17365d;">:&nbsp;</span><span style="font-size: 9.0pt; font-family: 'Arial Narrow',sans-serif; color: blue;"><a href="mailto:plh-tr.phntsafehaven@nhs.net">plh-tr.phntsafehaven@nhs.net</a></span></p>
-"""
+#HTML of email content with signature footer
+email_content = ("""<p>Hi,</p>
+                    <p>Please find attatched the test SPC file sent via python, with limits recalculated for type 3 attendances</p>"""
+                 + open(email_path + 'email signature.txt', 'r').read())
 #Add email signature to the end of the html
-attachment = mail.Attachments.Add(email_signature)
+attachment = mail.Attachments.Add(email_path + 'email footer.png')
 attachment.PropertyAccessor.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", "MyId1")
 mail.HTMLBody = email_content + "<html><body><img src=""cid:MyId1""></body></html>"
 #Attatch the flagged file

@@ -29,8 +29,8 @@
 SPC Charts/
 pdfs/
 
-#emails text file
-emails.txt
+#email files folder
+email files/
 
 #The wierd thumbs.db file that's appeared
 *.db
