@@ -1,4 +1,7 @@
+print('importing libraries...')
 import os
+import time
+import pyodbc
 import numpy as np
 import pandas as pd
 import textwrap as tw
@@ -18,40 +21,85 @@ mpl.rcParams.update({'font.size': 18})
 ###################################################################################################
                                 ####Define various filepaths####
 ###################################################################################################
+print('Libraries imported. Running script...')
 base_path = "G:/PerfInfo/Performance Management/OR Team/Emily Projects/General Analysis/SPC Charts"
 symbol_path = base_path + "/Symbols/"
 charts_path = base_path + "/SPC Charts/"
 pdfs_path = base_path + "/pdfs/"
 email_path = base_path + "/email files/"
-
+#List to store the file name and final pdf position of all the plots created
+plot_files = []
 ###################################################################################################
                                         ####Read in data####
 ###################################################################################################
-#create connection
+#check which driver is installed (Simon doesn't have 17, so he needs *special code* to check and
+#use whatever driver he does have).
+driver = [driver for driver in pyodbc.drivers() if 'ODBC Driver' in driver][0]
 sdmart_engine = create_engine('mssql+pyodbc://@SDMartDataLive2/InfoDB?'\
-                           'trusted_connection=yes&driver=ODBC+Driver+17'\
-                               '+for+SQL+Server')
+                              'trusted_connection=yes&driver='
+                              + '+'.join(driver.split(' ')))
 
-data_sql = """SELECT [WeekEndDate],
-                     [metric_id],
-                     [metric_desc],
-                     [data],
-                     [GoodDirection],
-                     [ReCalc],
-                     [Reason]
-                     FROM [InfoDB].[dbo].[ceo_flashcard]
-                     ORDER BY metric_id, WeekEndDate"""
+data_sql = """SELECT *
+              FROM [InfoDB].[dbo].[ceo_flashcard]
+              ORDER BY metric_id, WeekEndDate"""
 
 full_data = pd.read_sql(data_sql, sdmart_engine)
-
 sdmart_engine.dispose()
+print('Data read sucessfully.  Beginning producing plots...')
+###################################################################################################
+                                ####Functions to create charts####
+###################################################################################################
 
-###################################################################################################
-                                ####Function to create SPC charts####
-###################################################################################################
-#Function defining SPC chart without using a window. Using moving range for 
-#lower plot
-def spcChartIndiv(sub_data, id, metric, good_dir = 'down', target=''):
+#######Line Charts
+def Line_Chart(data):
+    #pivot into one row perdate
+    plot = data.pivot(index='WeekEndDate', columns='metric_desc', values='data')
+    #Get the actual and plan column names to use
+    actuals = [met for met in plot.columns if 'actuals' in met.lower()][0]
+    plan = [met for met in plot.columns if 'plan' in met.lower()][0]
+    #Get the overall name of the plot
+    name = plan.replace('plan', '').replace('Plan', '')
+    save_name = f'{id2} & {id2} {name.replace('<', 'lt').replace('>', 'gt').replace('/', ' or ')}'
+    #plot
+    fig, ax1 = plt.subplots(1,1, figsize=(15, 4))
+    ax1.set_title('\n'.join(tw.wrap(name, 50)))
+    plot[plan].plot(ax=ax1, label='Plan', color='darkorange', style='--', lw=3)
+    plot[actuals].plot(ax=ax1, label='Actual', color='blue', lw=3)
+    ax1.legend()
+    fig.savefig(charts_path + save_name + ".png", format='png', bbox_inches="tight")
+    plt.close()
+    #record the file name and it's plot order
+    plot_files.append((data['SortOrder'].mean().round(), save_name))
+
+#######Stacked Bar Charts
+def stacked_bar_chart(data):
+    save_name = data['metric_desc'].iloc[0].split(' - ')[0].replace('/', ' or ')
+    order = data['SortOrder'].mean().round()
+    #pivot to put data in correct positions
+    data = data.pivot(index='WeekEndDate', columns='metric_desc', values='data')
+    #rename columns and get the data for each part of the stacked columns
+    data.columns = ['P0', 'P1', 'P2', 'P3']
+    x = data.index
+    P0 = data['P0']
+    P1 = data['P1']
+    P2 = data['P2']
+    P3 = data['P3']
+    #create plot
+    fig, ax1 = plt.subplots(1,1, figsize=(15, 4))
+    ax1.set_title('\n'.join(tw.wrap(save_name, 50)))
+    ax1.bar(x, P0, label='P0', width=5, color='blue')
+    ax1.bar(x, P1, bottom=P0, label='P1', width=5, color='darkorange')
+    ax1.bar(x, P2, bottom=P0+P1, label='P2', width=5, color='green')
+    ax1.bar(x, P3, bottom=P0+P1+P2, label='P3', width=5, color='red')
+    ax1.legend()
+    #######Save the figure
+    fig.savefig(charts_path + save_name + ".png", format='png', bbox_inches="tight")
+    plt.close()
+    #######record the file name and it's plot order
+    plot_files.append((order, save_name))
+
+#######SPC Charts
+def SPC_Chart(sub_data, id, metric, good_dir = 'down', target=''):
     #####Initial calculations
     data_len = len(sub_data['data'])
     date = sub_data['WeekEndDate'].to_numpy()
@@ -260,22 +308,47 @@ def spcChartIndiv(sub_data, id, metric, good_dir = 'down', target=''):
     #######Save the figure
     fig.savefig(charts_path + save_name + ".png", format='png', bbox_inches="tight")
     plt.close()
-
+    #######record the file name and it's plot order
+    plot_files.append((sub_data['SortOrder'].mean(), save_name))
 
 ###################################################################################################
-                                    ####Create SPC Charts####
+                                ####Create Actual/Plan plots####
+###################################################################################################
+#Get the list of pairs usign thier ids (these are consecutively numbered which is helpful)
+metric_id_pairs = [(i, i+1) for i in range(1038, 1050, 2)]
+
+for id1, id2 in metric_id_pairs:
+    #for each plan/actual pair, get the data and create the line graph.
+    data = full_data.loc[(full_data['metric_id'] == id1) | (full_data['metric_id'] == id2)].copy()
+    Line_Chart(data)
+
+###################################################################################################
+                                ####Stacked Bar Chart Plot####
+###################################################################################################
+#Get the list of metrics to create the stacked bar plot for discharges
+metric_ids = [i for i in range(1024, 1028)]
+#filter to data for these ids
+data = full_data.loc[full_data['metric_id'].isin(metric_ids)].copy()
+stacked_bar_chart(data)
+
+###################################################################################################
+                                  ####Create SPC Charts####
 ###################################################################################################
 ######Loop over each metric and create it's SPC Chart
 #List of unique metrics
-metrics = (full_data[['metric_id', 'metric_desc', 'GoodDirection']]
-           .drop_duplicates().sort_values(by='metric_id').values.tolist())
+complete_ids = metric_ids + list(sum(metric_id_pairs, ()))
+metrics = (full_data.loc[~full_data['metric_id'].isin(complete_ids),
+                         ['metric_id', 'metric_desc', 'GoodDirection']]
+                         .drop_duplicates().values.tolist())
 #Loop over each metric and create it's SPC
 for id, metric, good_dir in metrics:
     #Filter data to that metric, ensure it's sorted
     sub_data = full_data.loc[full_data['metric_id'] == id].copy().reset_index()
     #Create and save the SPC Chart
-    spcChartIndiv(sub_data, id, metric, good_dir)
-print(f'All SPC Charts created and saved in {charts_path}')
+    SPC_Chart(sub_data, id, metric, good_dir)
+
+print(f'All charts created and saved in {charts_path}')
+time.sleep(10)
 
 ###################################################################################################
                                     ####Create pdf file####
@@ -292,23 +365,22 @@ margin = 2
 img_width = (width - margin * 3) / cols
 img_height = (height - margin * 3) / rows
 
+ordered_file_list = (pd.DataFrame(plot_files, columns=['order', 'file name'])
+                     .sort_values(by='order')['file name'].values.tolist())
 #Loop over each image, start a new page if required
-for i, img_path in enumerate(os.listdir(charts_path)):
-    #Ensure only png image files are added to the pdf, in case others sneak in
-    if img_path.split('.')[-1] == 'png':
-        #Create a new page if 4 images have already been added
-        if i > 0 and i % images_per_page == 0:
-            c.showPage()  # New page
-        
-        #Work out image position
-        position = i % images_per_page
-        col = position % cols
-        row = position // cols
-        x = margin + col * (img_width + margin)
-        y = height - margin - (row + 1) * (img_height + margin)
-        #add image to page
-        c.drawImage(charts_path+img_path, x, y, width=img_width, height=img_height, 
-                    preserveAspectRatio=True, anchor='c')
+for i, img_name in enumerate(ordered_file_list):
+    #Create a new page if 4 images have already been added
+    if i > 0 and i % images_per_page == 0:
+        c.showPage()  # New page
+    #Work out image position
+    position = i % images_per_page
+    col = position % cols
+    row = position // cols
+    x = margin + col * (img_width + margin)
+    y = height - margin - (row + 1) * (img_height + margin)
+    #add image to page
+    c.drawImage(charts_path+img_name+'.png', x, y, width=img_width, height=img_height, 
+                preserveAspectRatio=True, anchor='c')
 #save pdf
 c.save()
 print(f'new pdf created in {pdfs_path}')
@@ -316,18 +388,18 @@ print(f'new pdf created in {pdfs_path}')
 ###################################################################################################
                                         ####Send email####
 ###################################################################################################
-#send email with latest flagged output attatched    
+#send email with latest flagged output attatched 
 # Create Outlook application object and mail item
 outlook = win32.Dispatch('outlook.application')
 mail = outlook.CreateItem(0)    
 # Set email properties
-mail.To = open(base_path + 'email addresses.txt', 'r').read()
+mail.To = open(email_path + 'email addresses.txt', 'r').read()
 #mail.To = 'e.obrien6@nhs.net'
-mail.Subject = 'TEST - SPC Charts'
+mail.Subject = 'Metric Charts'
 #HTML of email content with signature footer
 email_content = ("""<p>Hi,</p>
-                    <p>Please find attatched the test SPC file sent via python, with limits recalculated for type 3 attendances</p>"""
-                 + open(email_path + 'email signature.txt', 'r').read())
+                    <p>Please find attatched the outputted metric charts file.</p>"""
+                    + open(email_path + 'email signature.txt', 'r').read())
 #Add email signature to the end of the html
 attachment = mail.Attachments.Add(email_path + 'email footer.png')
 attachment.PropertyAccessor.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", "MyId1")
@@ -336,4 +408,4 @@ mail.HTMLBody = email_content + "<html><body><img src=""cid:MyId1""></body></htm
 mail.Attachments.Add(pdf_filepath)
 # Send email
 mail.Send()
-print(f"Email sent successfully")
+print(f"Email sent successfully, process complete.")

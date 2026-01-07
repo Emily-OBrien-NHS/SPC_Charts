@@ -34,3 +34,6 @@ email files/
 
 #The wierd thumbs.db file that's appeared
 *.db
+
+#The bat file
+*.bat
