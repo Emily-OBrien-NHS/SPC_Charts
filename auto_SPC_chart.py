@@ -1,4 +1,4 @@
-print('importing libraries...')
+print('Importing libraries...')
 import os
 import time
 import pyodbc
